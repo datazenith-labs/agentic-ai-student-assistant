@@ -1,5 +1,10 @@
 # SAGE — Agentic AI Student Assistant
 
+<p align="center">
+  <img src="assets/images/sage-banner.png" alt="SAGE Banner" width="100%">
+</p>
+
+
 **SAGE (Student Academic Guidance Engine) is an intelligent, agentic multi-tool platform that helps university students prepare for exams, navigate course decisions, and automate academic logistics - powered by Claude, the Model Context Protocol (MCP), and Retrieval-Augmented Generation (RAG).**
 
 <p align="center">
