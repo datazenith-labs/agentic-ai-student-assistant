@@ -1,48 +1,48 @@
 # ============================================================
 #  SAGE - Python Dependencies
 #  Install with:  pip install -r requirements.txt
-#  (Versions pinned to known-stable releases as of project start.)
+#  Loosened pins to avoid pip dependency backtracking.
 # ============================================================
 
 # --- Web Framework ---
-fastapi==0.115.6
-uvicorn[standard]==0.34.0
-python-multipart==0.0.20
+fastapi
+uvicorn[standard]
+python-multipart
 
 # --- Settings & Validation ---
-pydantic==2.10.4
-pydantic-settings==2.7.1
-python-dotenv==1.0.1
+pydantic
+pydantic-settings
+python-dotenv
 
 # --- LLM (Claude) ---
-anthropic==0.42.0
+anthropic
 
 # --- MCP (Model Context Protocol) ---
-mcp==1.2.0
+mcp
 
 # --- RAG (Retrieval-Augmented Generation) ---
-llama-index==0.12.10
-llama-index-vector-stores-chroma==0.4.1
-llama-index-embeddings-openai==0.3.1
-chromadb==0.6.3
+llama-index-core
+llama-index-vector-stores-chroma
+llama-index-embeddings-openai
+chromadb
 
 # --- PDF Processing ---
-pymupdf==1.25.1
+pymupdf
 
 # --- Database ---
-sqlalchemy==2.0.36
-aiosqlite==0.20.0
-alembic==1.14.0
+sqlalchemy
+aiosqlite
+alembic
 
 # --- Authentication ---
-python-jose[cryptography]==3.3.0
-passlib[bcrypt]==1.7.4
+python-jose[cryptography]
+passlib[bcrypt]
 
 # --- Frontend ---
-streamlit==1.41.1
-requests==2.32.3
+streamlit
+requests
 
 # --- Testing ---
-pytest==8.3.4
-pytest-asyncio==0.25.2
-httpx==0.28.1
+pytest
+pytest-asyncio
+httpx
