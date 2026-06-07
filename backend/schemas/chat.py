@@ -31,6 +31,14 @@ class ChatRequest(BaseModel):
         description="The student's message.",
         examples=["What does my document say about positional encoding?"],
     )
+    collection_name: str | None = Field(
+        default=None,
+        description=(
+            "The ChromaDB collection name for the student's active uploaded document. "
+            "Optional - if omitted, Claude will note that no documents are loaded."
+        ),
+        examples=["user_1670551a_doc_abc123"],
+    )
 
 
 class ChatResponse(BaseModel):

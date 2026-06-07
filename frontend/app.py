@@ -1,7 +1,7 @@
 """
-SAGE - Streamlit chat UI.
+SAGE - Streamlit chat UI with PDF upload.
 
-A pure-Python web UI that talks to the FastAPI backend.
+Pure-Python web UI that talks to the FastAPI backend.
 Run with:
     streamlit run frontend/app.py
 
@@ -42,34 +42,76 @@ st.caption("Student Academic Guidance Engine — your AI study assistant")
 
 
 # ----------------------------------------------------------------------
-# SESSION STATE (Streamlit's way of persisting data across reruns)
+# SESSION STATE
 # ----------------------------------------------------------------------
 
 if "messages" not in st.session_state:
-    # Each message: {"role": "user" | "assistant", "content": str, "tools": list[str]}
     st.session_state.messages = []
-
 if "user_id" not in st.session_state:
     st.session_state.user_id = DEFAULT_USER_ID
-
 if "session_id" not in st.session_state:
     st.session_state.session_id = DEFAULT_SESSION_ID
+if "active_collection" not in st.session_state:
+    st.session_state.active_collection = None
+if "active_doc_name" not in st.session_state:
+    st.session_state.active_doc_name = None
+if "uploaded_filename" not in st.session_state:
+    st.session_state.uploaded_filename = None
 
 
 # ----------------------------------------------------------------------
-# SIDEBAR — connection info + session controls
+# SIDEBAR — upload + connection info
 # ----------------------------------------------------------------------
 
 with st.sidebar:
-    st.header("Session Info")
-    st.text_input("User ID", value=st.session_state.user_id, key="user_id_input", disabled=True)
-    st.text_input("Session ID", value=st.session_state.session_id, key="session_id_input", disabled=True)
+    st.header("📚 Your Document")
+
+    uploaded = st.file_uploader(
+        "Upload a PDF to chat with",
+        type=["pdf"],
+        help="Drop a lecture PDF, paper, or notes file here.",
+    )
+
+    if uploaded is not None and uploaded.name != st.session_state.uploaded_filename:
+        # New file detected — upload it
+        with st.spinner(f"Ingesting {uploaded.name}... (may take a minute)"):
+            try:
+                response = requests.post(
+                    f"{API_URL}/documents/upload",
+                    data={"user_id": st.session_state.user_id},
+                    files={"file": (uploaded.name, uploaded.getvalue(), "application/pdf")},
+                    timeout=300,  # ingestion can take time for big PDFs
+                )
+                if response.status_code == 200:
+                    data = response.json()
+                    st.session_state.active_collection = data["collection_name"]
+                    st.session_state.active_doc_name = data["filename"]
+                    st.session_state.uploaded_filename = uploaded.name
+                    st.success(f"✓ Indexed {data['chunk_count']} chunks from {data['filename']}")
+                    st.rerun()
+                else:
+                    st.error(f"Upload failed ({response.status_code}): {response.text[:300]}")
+            except Exception as exc:
+                st.error(f"Upload error: {type(exc).__name__}: {exc}")
+
+    if st.session_state.active_collection:
+        st.success(f"📄 Active: **{st.session_state.active_doc_name}**")
+        if st.button("Forget current document"):
+            st.session_state.active_collection = None
+            st.session_state.active_doc_name = None
+            st.session_state.uploaded_filename = None
+            st.rerun()
+    else:
+        st.info("No document loaded. Upload a PDF above to ground SAGE in your materials.")
+
+    st.divider()
+    st.subheader("Session Info")
+    st.text_input("User ID", value=st.session_state.user_id, disabled=True)
+    st.text_input("Session ID", value=st.session_state.session_id, disabled=True)
 
     st.divider()
     st.subheader("Backend")
     st.code(API_URL, language=None)
-
-    # Quick health check
     try:
         r = requests.get(API_URL.replace("/api/v1", "/"), timeout=2)
         if r.status_code == 200:
@@ -97,18 +139,16 @@ for msg in st.session_state.messages:
 
 
 # ----------------------------------------------------------------------
-# CHAT INPUT — the box at the bottom
+# CHAT INPUT
 # ----------------------------------------------------------------------
 
 user_input = st.chat_input("Ask SAGE anything about your studies...")
 
 if user_input:
-    # 1. Show the user's message immediately
     st.session_state.messages.append({"role": "user", "content": user_input, "tools": []})
     with st.chat_message("user"):
         st.markdown(user_input)
 
-    # 2. Call the backend
     with st.chat_message("assistant"):
         with st.spinner("SAGE is thinking..."):
             try:
@@ -118,8 +158,9 @@ if user_input:
                         "user_id": st.session_state.user_id,
                         "session_id": st.session_state.session_id,
                         "message": user_input,
+                        "collection_name": st.session_state.active_collection,
                     },
-                    timeout=120,  # Claude + tools can take a while
+                    timeout=120,
                 )
 
                 if response.status_code == 200:

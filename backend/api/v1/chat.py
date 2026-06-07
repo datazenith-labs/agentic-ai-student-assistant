@@ -34,7 +34,9 @@ async def get_db() -> AsyncSession:
         "may call MCP tools (search_materials, generate_quiz, "
         "summarize_document) autonomously to compose its reply. "
         "Conversation history is loaded from the database, and both the "
-        "user message and Claude's reply are persisted."
+        "user message and Claude's reply are persisted. If the optional "
+        "'collection_name' is provided, Claude will route document searches "
+        "to that ChromaDB collection."
     ),
 )
 async def chat_endpoint(
@@ -44,7 +46,7 @@ async def chat_endpoint(
     """
     The main chat endpoint.
 
-    Body shape: {user_id, session_id, message}
+    Body shape: {user_id, session_id, message, collection_name?}
     Returns:    {reply, tools_used, iterations}
     """
     try:
@@ -53,6 +55,7 @@ async def chat_endpoint(
             user_id=payload.user_id,
             session_id=payload.session_id,
             user_message=payload.message,
+            collection_name=payload.collection_name,
         )
     except Exception as exc:
         # Surface the error to the client without leaking internals

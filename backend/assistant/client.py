@@ -41,10 +41,11 @@ _client = Anthropic()
 _MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
 _MAX_TOOL_ITERATIONS = 6  # safety cap to prevent infinite tool-call loops
 
-SYSTEM_PROMPT = (
+SYSTEM_PROMPT_TEMPLATE = (
     "You are SAGE (Student Academic Guidance Engine), an AI study assistant. "
     "You help university students prepare for exams, search their uploaded "
     "documents, generate quizzes, and plan their studies.\n\n"
+    "{collection_hint}"
     "You have access to MCP tools - use them when relevant. In particular:\n"
     "- When the student references their own materials, ALWAYS call "
     "search_materials first to ground your answer in their documents.\n"
@@ -55,6 +56,25 @@ SYSTEM_PROMPT = (
     "Be warm, encouraging, and pedagogically minded - you're a tutor, "
     "not just a search engine."
 )
+
+
+def _build_system_prompt(collection_name: str | None) -> str:
+    """Inject the active collection name into the system prompt so Claude
+    knows which collection to pass to search_materials / summarize_document."""
+    if collection_name:
+        hint = (
+            f"IMPORTANT: The student's active document collection is "
+            f"'{collection_name}'. ALWAYS use this exact value for the "
+            f"'collection_name' parameter when calling search_materials or "
+            f"summarize_document.\n\n"
+        )
+    else:
+        hint = (
+            "Note: The student has not uploaded any documents yet. If they "
+            "ask about 'their materials', politely tell them to upload a "
+            "PDF using the sidebar first.\n\n"
+        )
+    return SYSTEM_PROMPT_TEMPLATE.format(collection_hint=hint)
 
 
 # ----------------------------------------------------------------------
@@ -104,16 +124,19 @@ async def chat(
     user_id: str,
     session_id: str,
     user_message: str,
+    collection_name: str | None = None,
 ) -> dict[str, Any]:
     """
     Handle one full chat turn: load history, run agentic loop, save messages,
     return the result.
 
     Args:
-        db:           Async SQLAlchemy session.
-        user_id:      The student's UUID.
-        session_id:   The chat session (conversation thread) UUID.
-        user_message: What the student just typed.
+        db:              Async SQLAlchemy session.
+        user_id:         The student's UUID.
+        session_id:      The chat session (conversation thread) UUID.
+        user_message:    What the student just typed.
+        collection_name: The active document collection (if any). Tells Claude
+                         which ChromaDB collection to search.
 
     Returns:
         {
@@ -137,7 +160,7 @@ async def chat(
         response = _client.messages.create(
             model=_MODEL,
             max_tokens=2048,
-            system=SYSTEM_PROMPT,
+            system=_build_system_prompt(collection_name),
             tools=EXAM_PREP_TOOLS,
             messages=messages,
         )

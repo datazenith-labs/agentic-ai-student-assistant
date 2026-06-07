@@ -4,7 +4,7 @@ SAGE - FastAPI application entry point.
 This is the main backend server. It:
   - Creates the FastAPI app
   - Configures CORS so the Streamlit frontend can call it
-  - Registers all API routes (currently just /chat)
+  - Registers all API routes (/chat and /documents)
   - Exposes a root health-check endpoint
 
 Run with:
@@ -22,6 +22,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from backend.api.v1 import chat as chat_routes
+from backend.api.v1 import documents as documents_routes
 
 load_dotenv()
 
@@ -59,9 +60,12 @@ app.add_middleware(
 # ROUTES
 # ----------------------------------------------------------------------
 
-# Register the chat router under /api/v1
-# Full path becomes: POST /api/v1/chat
+# Register routers under /api/v1
+# Full paths become:
+#   POST /api/v1/chat
+#   POST /api/v1/documents/upload
 app.include_router(chat_routes.router, prefix="/api/v1")
+app.include_router(documents_routes.router, prefix="/api/v1")
 
 
 @app.get("/", tags=["health"])
