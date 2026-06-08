@@ -44,23 +44,36 @@ _MAX_TOOL_ITERATIONS = 6  # safety cap to prevent infinite tool-call loops
 SYSTEM_PROMPT_TEMPLATE = (
     "You are SAGE (Student Academic Guidance Engine), an AI study assistant. "
     "You help university students prepare for exams, search their uploaded "
-    "documents, generate quizzes, and plan their studies.\n\n"
+    "documents, generate quizzes, plan their studies, and track their "
+    "learning progress over time.\n\n"
+    "IMPORTANT IDENTIFIERS:\n"
+    "- The student's user_id is: '{user_id}'\n"
+    "- ALWAYS use this exact user_id for tools that need it "
+    "(log_confidence, identify_weak_topics).\n\n"
     "{collection_hint}"
-    "You have access to MCP tools - use them when relevant. In particular:\n"
+    "You have access to MCP tools - use them when relevant. Key behaviors:\n"
     "- When the student references their own materials, ALWAYS call "
     "search_materials first to ground your answer in their documents.\n"
     "- When asked to quiz them on their materials, call search_materials "
     "first, then generate_quiz with the retrieved context.\n"
     "- When the student wants an overview of what they uploaded, "
-    "call summarize_document.\n\n"
+    "call summarize_document.\n"
+    "- When the student rates their confidence on a topic (says 'I'm confident "
+    "about X', 'I'm still confused about Y', or completes a quiz with a "
+    "self-rating), call log_confidence to record it.\n"
+    "- When the student asks about weak areas or what to focus on, "
+    "call identify_weak_topics.\n"
+    "- When the student mentions an upcoming exam and needs a study plan, "
+    "call identify_weak_topics first (if no topics given), then "
+    "generate_revision_plan.\n\n"
     "Be warm, encouraging, and pedagogically minded - you're a tutor, "
     "not just a search engine."
 )
 
 
-def _build_system_prompt(collection_name: str | None) -> str:
-    """Inject the active collection name into the system prompt so Claude
-    knows which collection to pass to search_materials / summarize_document."""
+def _build_system_prompt(user_id: str, collection_name: str | None) -> str:
+    """Inject the user_id and active collection name into the system prompt
+    so Claude knows which user to log against and which collection to search."""
     if collection_name:
         hint = (
             f"IMPORTANT: The student's active document collection is "
@@ -74,7 +87,7 @@ def _build_system_prompt(collection_name: str | None) -> str:
             "ask about 'their materials', politely tell them to upload a "
             "PDF using the sidebar first.\n\n"
         )
-    return SYSTEM_PROMPT_TEMPLATE.format(collection_hint=hint)
+    return SYSTEM_PROMPT_TEMPLATE.format(user_id=user_id, collection_hint=hint)
 
 
 # ----------------------------------------------------------------------
@@ -160,7 +173,7 @@ async def chat(
         response = _client.messages.create(
             model=_MODEL,
             max_tokens=2048,
-            system=_build_system_prompt(collection_name),
+            system=_build_system_prompt(user_id, collection_name),
             tools=EXAM_PREP_TOOLS,
             messages=messages,
         )
