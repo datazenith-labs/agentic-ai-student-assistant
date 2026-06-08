@@ -7,27 +7,56 @@ exposed as a standalone MCP server. For now we attach them directly to the
 Claude API via the `tools` parameter.
 
 Available tools:
-  - search_materials      : RAG search over the student's uploaded documents.
-  - summarize_document    : Returns a summary of an entire uploaded document.
-  - generate_quiz         : Generates a multiple-choice quiz. Can be grounded
-                            in the student's documents if a collection is given.
+  RAG / Content tools:
+    - search_materials      : RAG search over the student's uploaded documents.
+    - summarize_document    : Returns a summary of an entire uploaded document.
+    - generate_quiz         : Generates a multiple-choice quiz.
+
+  Adaptive engine tools (Step 9):
+    - log_confidence        : Record how confident a student feels on a topic.
+    - identify_weak_topics  : Return topics where the student is struggling.
+    - generate_revision_plan: Build a buffer-aware study schedule.
 
 Owner: Abrar (AI/MCP Lead)
 """
 
 import json
 import os
+from datetime import datetime, timedelta, timezone
 
-from dotenv import load_dotenv
 from anthropic import Anthropic
+from dotenv import load_dotenv
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-# Pull in our RAG retriever - this is the bridge between MCP and RAG
+# Pull in our RAG retriever — bridge between MCP and RAG
 from backend.rag.retriever import search_documents
+
+# Database access for adaptive engine tools
+from backend.database.models import ConfidenceLog
 
 load_dotenv()
 
+# Allow nested asyncio loops (the adaptive tools wrap async DB calls in
+# asyncio.run, which would normally fail when called from inside an already-
+# running loop like FastAPI's). nest_asyncio patches Python's asyncio to
+# allow this.
+import nest_asyncio
+nest_asyncio.apply()
+
 _client = Anthropic()
 _MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
+
+
+# ----------------------------------------------------------------------
+# Internal: a sync engine for tool use
+# Tools are called synchronously from the agentic loop, so we use a
+# separate sync session here rather than threading async through.
+# ----------------------------------------------------------------------
+
+_DB_URL = os.getenv("DATABASE_URL", "sqlite+aiosqlite:///./data/sage.db")
+_tool_engine = create_async_engine(_DB_URL)
+_ToolSession = async_sessionmaker(_tool_engine, expire_on_commit=False)
 
 
 # ====================================================================
@@ -35,6 +64,7 @@ _MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
 # ====================================================================
 
 EXAM_PREP_TOOLS = [
+    # ─── RAG / Content tools ──────────────────────────────────────────
     {
         "name": "search_materials",
         "description": (
@@ -53,7 +83,7 @@ EXAM_PREP_TOOLS = [
                 },
                 "collection_name": {
                     "type": "string",
-                    "description": "The student's document collection name. For now, always use 'test_collection_5'.",
+                    "description": "The student's document collection name. Use the active collection provided in the system prompt.",
                 },
                 "top_k": {
                     "type": "integer",
@@ -76,7 +106,7 @@ EXAM_PREP_TOOLS = [
             "properties": {
                 "collection_name": {
                     "type": "string",
-                    "description": "The student's document collection name. For now, always use 'test_collection_5'.",
+                    "description": "The student's document collection name.",
                 },
             },
             "required": ["collection_name"],
@@ -113,11 +143,94 @@ EXAM_PREP_TOOLS = [
             "required": ["topic"],
         },
     },
+
+    # ─── Adaptive engine tools (Step 9) ───────────────────────────────
+    {
+        "name": "log_confidence",
+        "description": (
+            "Record how confident a student feels about a topic after studying or "
+            "taking a quiz. Use this when the student says things like 'I feel "
+            "confident about X', 'I'm still confused about Y', or after they "
+            "complete a quiz and rate their understanding. Confidence is on a "
+            "0.0-1.0 scale (0=very weak, 1=very strong)."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "string",
+                    "description": "The student's user ID. Use the user_id provided in the system prompt.",
+                },
+                "topic": {
+                    "type": "string",
+                    "description": "The topic the student is rating, e.g. 'positional encoding' or 'multi-head attention'.",
+                },
+                "score": {
+                    "type": "number",
+                    "description": "Confidence score 0.0-1.0. Map descriptions: very low=0.1, low=0.3, medium=0.5, high=0.75, very high=0.95.",
+                },
+            },
+            "required": ["user_id", "topic", "score"],
+        },
+    },
+    {
+        "name": "identify_weak_topics",
+        "description": (
+            "Look at the student's confidence history and return the topics where "
+            "they need the most work. Use this when planning revision, suggesting "
+            "what to study, or when the student asks 'what should I focus on?' or "
+            "'what are my weak areas?'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "user_id": {
+                    "type": "string",
+                    "description": "The student's user ID. Use the user_id provided in the system prompt.",
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "How many weak topics to return. Default is 5.",
+                    "default": 5,
+                },
+            },
+            "required": ["user_id"],
+        },
+    },
+    {
+        "name": "generate_revision_plan",
+        "description": (
+            "Build a day-by-day revision schedule for an upcoming exam. "
+            "Distributes weak topics first, leaves buffer days near the exam for "
+            "review. Use this when the student says things like 'I have an exam "
+            "in N days, help me plan' or 'make me a study schedule'."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "exam_date_iso": {
+                    "type": "string",
+                    "description": "Exam date in ISO format YYYY-MM-DD. If the student says 'in 10 days', calculate the date yourself.",
+                },
+                "topics": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "description": "List of topics to cover. If empty, call identify_weak_topics first to get the student's weak topics.",
+                },
+                "hours_per_day": {
+                    "type": "number",
+                    "description": "Suggested study hours per day. Default 2.",
+                    "default": 2,
+                },
+            },
+            "required": ["exam_date_iso", "topics"],
+        },
+    },
 ]
 
 
 # ====================================================================
-# TOOL IMPLEMENTATIONS
+# TOOL IMPLEMENTATIONS — Content tools
 # ====================================================================
 
 def search_materials(query: str, collection_name: str, top_k: int = 3) -> dict:
@@ -146,7 +259,6 @@ def search_materials(query: str, collection_name: str, top_k: int = 3) -> dict:
 
 def summarize_document(collection_name: str) -> dict:
     """Summarize an entire document by retrieving broad chunks and asking Claude to summarize."""
-    # Pull a wide sample of chunks across the document (using a generic query gets a spread)
     chunks = search_documents(
         "overview main topics introduction conclusion",
         collection_name,
@@ -158,10 +270,7 @@ def summarize_document(collection_name: str) -> dict:
             "message": f"No content found in collection '{collection_name}'.",
         }
 
-    # Combine the chunks into a single text block
     combined = "\n\n".join([f"[Page {c['page']}]\n{c['text']}" for c in chunks])
-
-    # Ask Claude to summarize
     prompt = (
         "Below are excerpts from a student's uploaded document. "
         "Write a clear 3-5 sentence summary of what this document is about, "
@@ -183,7 +292,7 @@ def summarize_document(collection_name: str) -> dict:
 
 
 def generate_quiz(topic: str, num_questions: int = 3, difficulty: str = "medium") -> dict:
-    """Generate a multiple-choice quiz. `topic` can be a plain topic OR retrieved doc excerpts."""
+    """Generate a multiple-choice quiz."""
     prompt = f"""Generate a {difficulty}-difficulty multiple-choice quiz based on the following topic/context.
 
 If the context below is a plain topic name, use your general knowledge.
@@ -216,16 +325,169 @@ with no other text before or after:
     )
 
     raw_text = response.content[0].text.strip()
-
-    # Strip markdown code fences if Claude added them
     if raw_text.startswith("```"):
         raw_text = raw_text.split("```")[1]
         if raw_text.startswith("json"):
             raw_text = raw_text[4:]
         raw_text = raw_text.strip()
 
-    quiz_data = json.loads(raw_text)
-    return quiz_data
+    return json.loads(raw_text)
+
+
+# ====================================================================
+# TOOL IMPLEMENTATIONS — Adaptive engine (Step 9)
+# ====================================================================
+
+async def _log_confidence_async(user_id: str, topic: str, score: float) -> dict:
+    """Persist a confidence rating to the database."""
+    async with _ToolSession() as session:
+        entry = ConfidenceLog(
+            user_id=user_id,
+            topic=topic.lower().strip(),  # normalize for grouping
+            score=float(score),
+        )
+        session.add(entry)
+        await session.commit()
+        await session.refresh(entry)
+        return {
+            "status": "ok",
+            "logged_id": entry.id,
+            "topic": entry.topic,
+            "score": entry.score,
+        }
+
+
+def log_confidence(user_id: str, topic: str, score: float) -> dict:
+    """Sync wrapper around the async DB call."""
+    import asyncio
+    return asyncio.run(_log_confidence_async(user_id, topic, score))
+
+
+async def _identify_weak_topics_async(user_id: str, limit: int = 5) -> dict:
+    """Query the confidence_logs table for this user's weakest topics
+    (by average score, lowest first)."""
+    async with _ToolSession() as session:
+        stmt = (
+            select(ConfidenceLog)
+            .where(ConfidenceLog.user_id == user_id)
+            .order_by(desc(ConfidenceLog.created_at))
+        )
+        result = await session.execute(stmt)
+        all_logs = result.scalars().all()
+
+    if not all_logs:
+        return {
+            "status": "no_data",
+            "message": "No confidence logs yet for this student. Suggest taking a quiz or rating some topics to build a learning profile.",
+            "weak_topics": [],
+        }
+
+    # Compute average score per topic (using the most recent entries)
+    by_topic: dict[str, list[float]] = {}
+    for log in all_logs:
+        by_topic.setdefault(log.topic, []).append(log.score)
+
+    avg_per_topic = [
+        {
+            "topic": topic,
+            "average_score": round(sum(scores) / len(scores), 2),
+            "attempts": len(scores),
+        }
+        for topic, scores in by_topic.items()
+    ]
+    # Sort: lowest average first (weakest)
+    avg_per_topic.sort(key=lambda x: x["average_score"])
+
+    return {
+        "status": "ok",
+        "weak_topics": avg_per_topic[:limit],
+        "total_topics_tracked": len(by_topic),
+    }
+
+
+def identify_weak_topics(user_id: str, limit: int = 5) -> dict:
+    """Sync wrapper around the async DB call."""
+    import asyncio
+    return asyncio.run(_identify_weak_topics_async(user_id, limit))
+
+
+def generate_revision_plan(
+    exam_date_iso: str,
+    topics: list[str],
+    hours_per_day: float = 2.0,
+) -> dict:
+    """
+    Build a day-by-day revision schedule.
+    Strategy: assign topics round-robin across days, leaving the last 2 days
+    as 'buffer' (mixed review + practice exam).
+    """
+    try:
+        exam_date = datetime.fromisoformat(exam_date_iso).date()
+    except ValueError:
+        return {
+            "status": "error",
+            "message": f"Could not parse exam_date_iso '{exam_date_iso}'. Use YYYY-MM-DD.",
+        }
+
+    today = datetime.now(timezone.utc).date()
+    days_until_exam = (exam_date - today).days
+
+    if days_until_exam <= 0:
+        return {
+            "status": "error",
+            "message": f"Exam date {exam_date_iso} is today or in the past. Cannot plan.",
+        }
+
+    if not topics:
+        return {
+            "status": "error",
+            "message": "No topics provided. Call identify_weak_topics first, or ask the student for topics.",
+        }
+
+    # Reserve the last ≤2 days for buffer
+    buffer_days = min(2, max(1, days_until_exam // 5))
+    study_days = days_until_exam - buffer_days
+
+    if study_days <= 0:
+        # Very short window — just split everything across whatever days we have
+        study_days = days_until_exam
+        buffer_days = 0
+
+    # Distribute topics across study days (round-robin)
+    schedule = []
+    for offset in range(study_days):
+        day_date = today + timedelta(days=offset)
+        # Each day gets ~ ceil(len(topics) / study_days) topics
+        day_topics = topics[offset::study_days]
+        if day_topics:
+            schedule.append({
+                "date": day_date.isoformat(),
+                "day_label": f"Day {offset + 1}",
+                "hours": hours_per_day,
+                "focus_topics": day_topics,
+                "activity": "Focused study + practice questions",
+            })
+
+    # Buffer days
+    for offset in range(study_days, days_until_exam):
+        day_date = today + timedelta(days=offset)
+        schedule.append({
+            "date": day_date.isoformat(),
+            "day_label": f"Day {offset + 1} (Buffer)",
+            "hours": hours_per_day,
+            "focus_topics": topics,  # all topics, light review
+            "activity": "Mixed review + mock exam",
+        })
+
+    return {
+        "status": "ok",
+        "exam_date": exam_date_iso,
+        "days_until_exam": days_until_exam,
+        "study_days": study_days,
+        "buffer_days": buffer_days,
+        "total_topics": len(topics),
+        "schedule": schedule,
+    }
 
 
 # ====================================================================
@@ -240,4 +502,10 @@ def execute_tool(tool_name: str, tool_input: dict) -> dict:
         return summarize_document(**tool_input)
     if tool_name == "generate_quiz":
         return generate_quiz(**tool_input)
+    if tool_name == "log_confidence":
+        return log_confidence(**tool_input)
+    if tool_name == "identify_weak_topics":
+        return identify_weak_topics(**tool_input)
+    if tool_name == "generate_revision_plan":
+        return generate_revision_plan(**tool_input)
     raise ValueError(f"Unknown tool: {tool_name}")
