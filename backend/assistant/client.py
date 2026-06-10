@@ -8,13 +8,20 @@ What it does:
   1. Loads the conversation history from the database (so Claude remembers
      what the student said earlier in this session).
   2. Saves the new user message to the database.
-  3. Runs the agentic Claude+MCP loop with all available tools.
+  3. Runs the agentic Claude+MCP loop with tools from ALL registered MCP servers.
   4. Saves Claude's final response (and which tools it used) to the database.
   5. Returns the final answer + metadata.
 
 The ~80-line loop here replaces what would otherwise be hundreds of lines
 of orchestration framework code (LangGraph / CrewAI). Claude itself
 decides which tools to call.
+
+Multi-server design:
+  - exam_prep_server   : RAG, quizzes, confidence tracking, revision plans
+  - advisor_server     : profile, course recommendations, prerequisites
+
+Adding a new MCP server is now a 3-line change: import its TOOLS and
+execute_*_tool function, append, and dispatch.
 
 Owner: Abrar (AI/MCP Lead)
 """
@@ -29,7 +36,16 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.database.models import Message, Session as DBSession
-from backend.mcp_servers.exam_prep_server import EXAM_PREP_TOOLS, execute_tool
+
+# Each MCP server exports a TOOLS list and an execute function.
+from backend.mcp_servers.exam_prep_server import (
+    EXAM_PREP_TOOLS,
+    execute_tool as execute_exam_prep_tool,
+)
+from backend.mcp_servers.advisor_server import (
+    ADVISOR_TOOLS,
+    execute_advisor_tool,
+)
 
 load_dotenv()
 
@@ -39,41 +55,76 @@ load_dotenv()
 
 _client = Anthropic()
 _MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
-_MAX_TOOL_ITERATIONS = 6  # safety cap to prevent infinite tool-call loops
+_MAX_TOOL_ITERATIONS = 8  # bumped from 6 — multi-server chains can be longer
+
+
+# ----------------------------------------------------------------------
+# TOOL REGISTRY (built once at import time)
+# ----------------------------------------------------------------------
+# Combine all server tools into one menu for Claude.
+# Build a dispatch table keyed by tool name so we know which server
+# implements each tool.
+
+ALL_TOOLS = EXAM_PREP_TOOLS + ADVISOR_TOOLS
+
+_TOOL_DISPATCH = {}
+for tool in EXAM_PREP_TOOLS:
+    _TOOL_DISPATCH[tool["name"]] = execute_exam_prep_tool
+for tool in ADVISOR_TOOLS:
+    _TOOL_DISPATCH[tool["name"]] = execute_advisor_tool
+
+
+def _execute_any_tool(tool_name: str, tool_input: dict) -> dict:
+    """Route a tool call to whichever MCP server owns it."""
+    dispatcher = _TOOL_DISPATCH.get(tool_name)
+    if dispatcher is None:
+        return {"status": "error", "message": f"Unknown tool: {tool_name}"}
+    return dispatcher(tool_name, tool_input)
+
+
+# ----------------------------------------------------------------------
+# SYSTEM PROMPT
+# ----------------------------------------------------------------------
 
 SYSTEM_PROMPT_TEMPLATE = (
     "You are SAGE (Student Academic Guidance Engine), an AI study assistant. "
-    "You help university students prepare for exams, search their uploaded "
-    "documents, generate quizzes, plan their studies, and track their "
-    "learning progress over time.\n\n"
+    "You help university students with three things:\n"
+    "  1. Studying: RAG over their uploaded materials, quizzes, summaries.\n"
+    "  2. Adaptive learning: tracking confidence, identifying weak topics, "
+    "building revision plans.\n"
+    "  3. Academic advising: reading their profile, recommending courses, "
+    "checking prerequisites.\n\n"
     "IMPORTANT IDENTIFIERS:\n"
     "- The student's user_id is: '{user_id}'\n"
     "- ALWAYS use this exact user_id for tools that need it "
-    "(log_confidence, identify_weak_topics).\n\n"
+    "(log_confidence, identify_weak_topics, get_student_profile, "
+    "recommend_courses).\n\n"
     "{collection_hint}"
-    "You have access to MCP tools - use them when relevant. Key behaviors:\n"
-    "- When the student references their own materials, ALWAYS call "
-    "search_materials first to ground your answer in their documents.\n"
-    "- When asked to quiz them on their materials, call search_materials "
-    "first, then generate_quiz with the retrieved context.\n"
-    "- When the student wants an overview of what they uploaded, "
-    "call summarize_document.\n"
-    "- When the student rates their confidence on a topic (says 'I'm confident "
-    "about X', 'I'm still confused about Y', or completes a quiz with a "
-    "self-rating), call log_confidence to record it.\n"
-    "- When the student asks about weak areas or what to focus on, "
-    "call identify_weak_topics.\n"
-    "- When the student mentions an upcoming exam and needs a study plan, "
-    "call identify_weak_topics first (if no topics given), then "
-    "generate_revision_plan.\n\n"
-    "Be warm, encouraging, and pedagogically minded - you're a tutor, "
-    "not just a search engine."
+    "Tool behavior guidelines:\n"
+    "- For 'what does my document say...' → search_materials first.\n"
+    "- For 'quiz me on my materials' → search_materials then generate_quiz.\n"
+    "- For 'summarize what I uploaded' → summarize_document.\n"
+    "- For self-ratings ('I'm confident on X', 'I'm weak on Y') → "
+    "log_confidence (once per topic).\n"
+    "- For 'what should I focus on?' or 'my weak areas?' → "
+    "identify_weak_topics.\n"
+    "- For 'upcoming exam, plan it' → identify_weak_topics first (if no topics "
+    "given), then generate_revision_plan.\n"
+    "- For 'what's my profile?' or 'what do you know about me?' → "
+    "get_student_profile.\n"
+    "- For 'what should I take next semester?' or 'recommend courses' → "
+    "get_student_profile first (to know background), then recommend_courses.\n"
+    "- For 'can I take CS401?' or 'am I ready for X?' → check_prerequisites.\n"
+    "- For deeper questions like 'based on my profile AND weak topics, what "
+    "should I focus on?' → chain get_student_profile + identify_weak_topics + "
+    "synthesize. This cross-server chaining is encouraged.\n\n"
+    "Be warm, encouraging, and pedagogically minded - you're a tutor and "
+    "advisor, not just a search engine."
 )
 
 
 def _build_system_prompt(user_id: str, collection_name: str | None) -> str:
-    """Inject the user_id and active collection name into the system prompt
-    so Claude knows which user to log against and which collection to search."""
+    """Inject the user_id and active collection name into the system prompt."""
     if collection_name:
         hint = (
             f"IMPORTANT: The student's active document collection is "
@@ -95,10 +146,7 @@ def _build_system_prompt(user_id: str, collection_name: str | None) -> str:
 # ----------------------------------------------------------------------
 
 async def _load_history(db: AsyncSession, session_id: str) -> list[dict]:
-    """
-    Load past messages from this session in Claude's expected format.
-    Returns a list of {"role": ..., "content": ...} dicts.
-    """
+    """Load past messages from this session in Claude's expected format."""
     stmt = (
         select(Message)
         .where(Message.session_id == session_id)
@@ -106,7 +154,6 @@ async def _load_history(db: AsyncSession, session_id: str) -> list[dict]:
     )
     result = await db.execute(stmt)
     messages = result.scalars().all()
-
     return [{"role": m.role, "content": m.content} for m in messages]
 
 
@@ -129,7 +176,7 @@ async def _save_message(
 
 
 # ----------------------------------------------------------------------
-# THE MAIN CHAT FUNCTION (this is what the API endpoint will call)
+# THE MAIN CHAT FUNCTION
 # ----------------------------------------------------------------------
 
 async def chat(
@@ -148,8 +195,7 @@ async def chat(
         user_id:         The student's UUID.
         session_id:      The chat session (conversation thread) UUID.
         user_message:    What the student just typed.
-        collection_name: The active document collection (if any). Tells Claude
-                         which ChromaDB collection to search.
+        collection_name: The active document collection (if any).
 
     Returns:
         {
@@ -174,7 +220,7 @@ async def chat(
             model=_MODEL,
             max_tokens=2048,
             system=_build_system_prompt(user_id, collection_name),
-            tools=EXAM_PREP_TOOLS,
+            tools=ALL_TOOLS,
             messages=messages,
         )
 
@@ -186,7 +232,7 @@ async def chat(
             for block in response.content:
                 if block.type == "tool_use":
                     tools_used.append(block.name)
-                    result = execute_tool(block.name, block.input)
+                    result = _execute_any_tool(block.name, block.input)
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
