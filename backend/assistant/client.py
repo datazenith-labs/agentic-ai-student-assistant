@@ -12,16 +12,13 @@ What it does:
   4. Saves Claude's final response (and which tools it used) to the database.
   5. Returns the final answer + metadata.
 
-The ~80-line loop here replaces what would otherwise be hundreds of lines
-of orchestration framework code (LangGraph / CrewAI). Claude itself
-decides which tools to call.
-
 Multi-server design:
   - exam_prep_server   : RAG, quizzes, confidence tracking, revision plans
   - advisor_server     : profile, course recommendations, prerequisites
+  - campus_server      : deadlines, timetable, daily-life tasks
 
 Adding a new MCP server is now a 3-line change: import its TOOLS and
-execute_*_tool function, append, and dispatch.
+execute function, then register both.
 
 Owner: Abrar (AI/MCP Lead)
 """
@@ -46,6 +43,10 @@ from backend.mcp_servers.advisor_server import (
     ADVISOR_TOOLS,
     execute_advisor_tool,
 )
+from backend.mcp_servers.campus_server import (
+    CAMPUS_TOOLS,
+    execute_campus_tool,
+)
 
 load_dotenv()
 
@@ -55,23 +56,22 @@ load_dotenv()
 
 _client = Anthropic()
 _MODEL = os.getenv("CLAUDE_MODEL", "claude-sonnet-4-5")
-_MAX_TOOL_ITERATIONS = 8  # bumped from 6 — multi-server chains can be longer
+_MAX_TOOL_ITERATIONS = 10  # bumped again — full-stack chains use many tools
 
 
 # ----------------------------------------------------------------------
 # TOOL REGISTRY (built once at import time)
 # ----------------------------------------------------------------------
-# Combine all server tools into one menu for Claude.
-# Build a dispatch table keyed by tool name so we know which server
-# implements each tool.
 
-ALL_TOOLS = EXAM_PREP_TOOLS + ADVISOR_TOOLS
+ALL_TOOLS = EXAM_PREP_TOOLS + ADVISOR_TOOLS + CAMPUS_TOOLS
 
 _TOOL_DISPATCH = {}
 for tool in EXAM_PREP_TOOLS:
     _TOOL_DISPATCH[tool["name"]] = execute_exam_prep_tool
 for tool in ADVISOR_TOOLS:
     _TOOL_DISPATCH[tool["name"]] = execute_advisor_tool
+for tool in CAMPUS_TOOLS:
+    _TOOL_DISPATCH[tool["name"]] = execute_campus_tool
 
 
 def _execute_any_tool(tool_name: str, tool_input: dict) -> dict:
@@ -88,17 +88,17 @@ def _execute_any_tool(tool_name: str, tool_input: dict) -> dict:
 
 SYSTEM_PROMPT_TEMPLATE = (
     "You are SAGE (Student Academic Guidance Engine), an AI study assistant. "
-    "You help university students with three things:\n"
+    "You help university students across three areas:\n"
     "  1. Studying: RAG over their uploaded materials, quizzes, summaries.\n"
     "  2. Adaptive learning: tracking confidence, identifying weak topics, "
     "building revision plans.\n"
     "  3. Academic advising: reading their profile, recommending courses, "
-    "checking prerequisites.\n\n"
+    "checking prerequisites.\n"
+    "  4. Campus life: managing deadlines, viewing their timetable, "
+    "organising their week.\n\n"
     "IMPORTANT IDENTIFIERS:\n"
     "- The student's user_id is: '{user_id}'\n"
-    "- ALWAYS use this exact user_id for tools that need it "
-    "(log_confidence, identify_weak_topics, get_student_profile, "
-    "recommend_courses).\n\n"
+    "- ALWAYS use this exact user_id for tools that need it.\n\n"
     "{collection_hint}"
     "Tool behavior guidelines:\n"
     "- For 'what does my document say...' → search_materials first.\n"
@@ -113,13 +113,19 @@ SYSTEM_PROMPT_TEMPLATE = (
     "- For 'what's my profile?' or 'what do you know about me?' → "
     "get_student_profile.\n"
     "- For 'what should I take next semester?' or 'recommend courses' → "
-    "get_student_profile first (to know background), then recommend_courses.\n"
+    "get_student_profile first, then recommend_courses.\n"
     "- For 'can I take CS401?' or 'am I ready for X?' → check_prerequisites.\n"
-    "- For deeper questions like 'based on my profile AND weak topics, what "
-    "should I focus on?' → chain get_student_profile + identify_weak_topics + "
-    "synthesize. This cross-server chaining is encouraged.\n\n"
-    "Be warm, encouraging, and pedagogically minded - you're a tutor and "
-    "advisor, not just a search engine."
+    "- For 'I have an assignment/exam/project due...' → add_deadline.\n"
+    "- For 'what's due?', 'what's coming up?', 'what's this week?' → "
+    "list_upcoming_deadlines.\n"
+    "- For 'what's my schedule', 'what's my Monday', 'my timetable' → "
+    "get_timetable_summary.\n"
+    "- For BIG questions that span domains (e.g. 'given my schedule, my "
+    "deadlines, and my weak topics, plan my next two weeks'): chain tools "
+    "across servers. This cross-server orchestration is encouraged and is "
+    "where SAGE shines.\n\n"
+    "Be warm, encouraging, and pedagogically minded - you're a tutor, "
+    "advisor, AND life-organiser."
 )
 
 
@@ -190,13 +196,6 @@ async def chat(
     Handle one full chat turn: load history, run agentic loop, save messages,
     return the result.
 
-    Args:
-        db:              Async SQLAlchemy session.
-        user_id:         The student's UUID.
-        session_id:      The chat session (conversation thread) UUID.
-        user_message:    What the student just typed.
-        collection_name: The active document collection (if any).
-
     Returns:
         {
           "reply": str,          # Claude's final text response
@@ -208,7 +207,6 @@ async def chat(
     history = await _load_history(db, session_id)
     await _save_message(db, session_id, role="user", content=user_message)
 
-    # Build the conversation in Claude's expected format
     messages: list[dict] = history + [{"role": "user", "content": user_message}]
 
     # 2. The agentic loop. Each iteration is one call to Claude.
@@ -240,7 +238,7 @@ async def chat(
                     })
 
             messages.append({"role": "user", "content": tool_results})
-            continue  # loop again so Claude can use the results
+            continue
 
         # Case B: Claude produced a final text answer - we're done
         if response.stop_reason == "end_turn":
@@ -249,11 +247,9 @@ async def chat(
                     final_text += block.text
             break
 
-        # Anything else (rare): bail out cleanly
         final_text = "[The assistant stopped unexpectedly.]"
         break
     else:
-        # Hit the iteration cap
         final_text += "\n\n[Stopped after reaching tool-call limit.]"
 
     # 3. Save Claude's final response
