@@ -1,0 +1,36 @@
+# SAGE - Streamlit theme configuration
+# Style: Modern AI Product (purple/violet accents, near-black sidebar,
+# clean sans-serif, light main area). Inspired by Claude.ai / Notion AI.
+
+[theme]
+# Main accent color — a refined violet that signals "AI product"
+primaryColor = "#6E4AFF"
+
+# Main chat area (light, clean, readable)
+backgroundColor = "#FAFAFA"
+
+# Secondary background (used in some inputs and selects)
+secondaryBackgroundColor = "#FFFFFF"
+
+# Body text color
+textColor = "#1A1A2E"
+
+# Typography
+font = "sans serif"
+baseRadius = "0.6rem"
+
+# Sidebar styling - the dark contrast that makes SAGE feel like a real product
+[theme.sidebar]
+primaryColor = "#A78BFA"
+backgroundColor = "#0F0F1A"
+secondaryBackgroundColor = "#1A1A2E"
+textColor = "#E5E5F0"
+
+[client]
+# Hide the "Made with Streamlit" footer for a cleaner production look
+toolbarMode = "minimal"
+showSidebarNavigation = false
+
+[server]
+# Smoother browser experience
+runOnSave = true
