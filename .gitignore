@@ -55,6 +55,7 @@ logs/
 .ipynb_checkpoints/
 
 # ─── Node.js / Next.js ───────────────────────────────────
+
 # Dependencies (regenerable via npm install)
 **/node_modules/
 
@@ -82,4 +83,9 @@ pnpm-debug.log*
 **/.eslintcache
 
 # Vercel local dev artifacts
-.vercel
+.vercel/
+
+# ─── Graphify ────────────────────────────────────────────
+
+# Generated knowledge graph outputs
+graphify-out/
