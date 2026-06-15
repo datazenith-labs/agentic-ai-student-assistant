@@ -55,7 +55,7 @@ export function Sidebar() {
             width={40}
             height={40}
             priority
-            className="rounded-lg"
+            className="rounded-lg size-10 object-contain"
           />
           <div className="leading-tight">
             <div className="text-xl font-bold tracking-tight bg-gradient-to-r from-white via-violet-200 to-violet-400 bg-clip-text text-transparent">
