@@ -45,7 +45,10 @@ app = FastAPI(
 # CORS - allows the Streamlit frontend (on a different port) to call us
 # ----------------------------------------------------------------------
 
-cors_origins = os.getenv("CORS_ORIGINS", "http://localhost:8501").split(",")
+# Default to allowing both Streamlit (8501) and Next.js (3000) in development.
+# Production should set the CORS_ORIGINS env var explicitly.
+_DEFAULT_DEV_ORIGINS = "http://localhost:3000,http://localhost:8501"
+cors_origins = os.getenv("CORS_ORIGINS", _DEFAULT_DEV_ORIGINS).split(",")
 
 app.add_middleware(
     CORSMiddleware,

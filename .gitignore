@@ -54,6 +54,12 @@ logs/
 # ─── Jupyter (if anyone uses notebooks) ──────────────────
 .ipynb_checkpoints/
 
+# Cross-branch working tree noise (these exist on urbee/nextjs-frontend)
+nextjs-frontend/
+graphify-out/
+
+# Local test files
+test-payload.json
 # ─── Node.js / Next.js ───────────────────────────────────
 
 # Dependencies (regenerable via npm install)
