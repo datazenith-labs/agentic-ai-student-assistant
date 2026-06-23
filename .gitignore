@@ -60,3 +60,38 @@ graphify-out/
 
 # Local test files
 test-payload.json
+# ─── Node.js / Next.js ───────────────────────────────────
+
+# Dependencies (regenerable via npm install)
+**/node_modules/
+
+# Next.js build output
+**/.next/
+**/out/
+
+# Next.js TypeScript generated declarations
+**/next-env.d.ts
+
+# Next.js cache
+**/.turbo/
+
+# Next.js / TypeScript build artifacts
+**/.swc/
+**/*.tsbuildinfo
+
+# npm / yarn debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# ESLint cache
+**/.eslintcache
+
+# Vercel local dev artifacts
+.vercel/
+
+# ─── Graphify ────────────────────────────────────────────
+
+# Generated knowledge graph outputs
+graphify-out/
