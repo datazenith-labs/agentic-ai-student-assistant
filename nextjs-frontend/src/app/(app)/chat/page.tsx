@@ -1,108 +1,57 @@
-// src/app/(app)/chat/page.tsx
-//
-// Phase 12.5b — Step 4 verification scaffold.
-// Same behavior as Step 3, but uses the useChat() convenience hook
-// instead of pulling slices directly from the Zustand store. Real chat
-// UI lands in 12.5c-e.
-
 "use client";
 
-import { Button } from "@/components/ui/button";
 import { useChat } from "@/hooks/use-chat";
+import { MessageList } from "@/components/chat/MessageList";
+import { ChatInput } from "@/components/chat/ChatInput";
 
+/**
+ * /chat — the main chat view. Replaces the 12.5b debug scaffold.
+ *
+ * Layout: a full-height column. MessageList fills the available space and
+ * scrolls; ChatInput is docked at the bottom. Both sit over the aurora
+ * background so the glass surfaces read as premium floating panels.
+ *
+ * When there are no messages yet, we show an empty state instead of an
+ * empty scroll area (suggested prompts come in Step 5; for now a simple
+ * centered welcome).
+ */
 export default function ChatPage() {
-  const {
-    conversations,
-    currentConversation,
-    messages,
-    isStreaming,
-    error,
-    sendMessage,
-    startNewConversation,
-    clearError,
-  } = useChat();
+  const { messages, isStreaming, error, sendMessage, clearError } = useChat();
+
+  const hasMessages = messages.length > 0;
 
   return (
-    <div className="p-8 space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold">Chat (debug scaffold)</h1>
-        <p className="text-sm text-muted-foreground mt-1">
-          Phase 12.5b Step 4 — using useChat() hook. Real UI in 12.5c-e.
-        </p>
-      </div>
-
-      <div className="flex flex-wrap gap-2">
-        <Button onClick={() => startNewConversation()}>New conversation</Button>
-        <Button
-          onClick={() => sendMessage("Say hi in one short sentence.")}
-          disabled={isStreaming}
-        >
-          {isStreaming ? "Streaming..." : "Send: Say hi"}
-        </Button>
-        <Button
-          variant="secondary"
-          onClick={() => sendMessage("What are my upcoming exams?")}
-          disabled={isStreaming}
-        >
-          Send: What exams?
-        </Button>
-      </div>
-
+    <div className="flex h-full flex-col">
+      {/* Error banner */}
       {error && (
-        <div className="rounded-md border border-red-300 bg-red-50 p-3 text-sm text-red-700 dark:border-red-800 dark:bg-red-950/40 dark:text-red-400">
-          <div className="flex items-start justify-between gap-3">
-            <span><strong>Error:</strong> {error}</span>
-            <button onClick={clearError} className="underline shrink-0">Dismiss</button>
-          </div>
-        </div>
-      )}
-
-      <div className="text-sm space-y-1">
-        <div>
-          <strong>Conversations:</strong> {conversations.length}
-        </div>
-        <div>
-          <strong>Current:</strong>{" "}
-          <code className="text-xs">
-            {currentConversation?.title ?? "(none)"}
-          </code>
-        </div>
-      </div>
-
-      {currentConversation && (
-        <div className="space-y-3 border-t pt-4">
-          <div className="text-sm font-semibold">
-            {currentConversation.title} · {messages.length} messages
-          </div>
-          {messages.map((m) => (
-            <div
-              key={m.id}
-              className="rounded-md border border-border p-3 space-y-2"
+        <div className="aurora-bg px-4 pt-3">
+          <div className="mx-auto flex max-w-3xl items-center justify-between gap-3 rounded-lg border border-red-500/30 bg-red-500/10 px-4 py-2 text-sm text-red-200">
+            <span>{error}</span>
+            <button
+              type="button"
+              onClick={clearError}
+              className="text-red-300/70 hover:text-red-200"
             >
-              <div className="flex items-center gap-2 text-xs">
-                <span className="font-semibold uppercase">{m.role}</span>
-                <span className="text-muted-foreground">{m.status}</span>
-              </div>
-              <div className="text-sm whitespace-pre-wrap">{m.content}</div>
-              {m.tool_calls.length > 0 && (
-                <ul className="space-y-1 text-xs font-mono">
-                  {m.tool_calls.map((tc) => (
-                    <li
-                      key={tc.id}
-                      className="rounded bg-muted/40 px-2 py-1 border border-border"
-                    >
-                      🔧 <span className="text-violet-600 dark:text-violet-400">{tc.name}</span>{" "}
-                      <span className="text-muted-foreground">[{tc.status}]</span>
-                      {" — "}
-                      {JSON.stringify(tc.input)}
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-          ))}
+              Dismiss
+            </button>
+          </div>
         </div>
       )}
+
+      {hasMessages ? (
+        <MessageList messages={messages} />
+      ) : (
+        <div className="aurora-bg flex flex-1 flex-col items-center justify-center px-4 text-center">
+          <h1 className="bg-gradient-to-r from-white to-violet-300 bg-clip-text text-3xl font-semibold text-transparent">
+            How can I help you today?
+          </h1>
+          <p className="mt-2 text-sm text-white/50">
+            Ask about your courses, exams, deadlines, or upload notes to study from.
+          </p>
+        </div>
+      )}
+
+      <ChatInput onSend={sendMessage} disabled={isStreaming} />
     </div>
   );
 }

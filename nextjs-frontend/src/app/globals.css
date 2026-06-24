@@ -1,6 +1,7 @@
-@import "tailwindcss";
+﻿@import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
+@plugin "@tailwindcss/typography";
 
 @custom-variant dark (&:is(.dark *));
 
@@ -127,4 +128,77 @@
   html {
     @apply font-sans;
   }
+}/* ============================================================
+   SAGE â€” "Deep Aurora" glass design tokens
+   Append this block to the END of src/app/globals.css.
+   Establishes: near-black base, ambient violet glow, and
+   reusable .glass / .glass-strong / .glass-edge utilities.
+   Every future surface (bubbles, cards, input) inherits these.
+   ============================================================ */
+
+@layer utilities {
+  /* --- Ambient aurora background ---------------------------------
+     A near-black charcoal base with two low-opacity radial glows
+     (violet top-left, indigo bottom-right). This is what gives the
+     glass something colorful to blur â€” without it, glass looks flat.
+     Apply .aurora-bg to the chat area / app shell background. */
+  .aurora-bg {
+    background-color: #0b0b0f;
+    background-image:
+      radial-gradient(
+        70rem 70rem at 0% 0%,
+        oklch(0.541 0.245 293.009 / 0.38),
+        transparent 60%
+      ),
+      radial-gradient(
+        60rem 60rem at 100% 100%,
+        oklch(0.55 0.18 270 / 0.30),
+        transparent 55%
+      ),
+      radial-gradient(
+        50rem 40rem at 50% 0%,
+        oklch(0.60 0.20 300 / 0.18),
+        transparent 50%
+      );
+    background-attachment: fixed;
+  }
+
+  /* --- Core glass surface ----------------------------------------
+     Translucent panel + blur + a 1px light-catching top edge.
+     The inset top highlight is the detail that makes it read as
+     premium glass rather than a gray translucent box. */
+  .glass {
+    background-color: oklch(1 0 0 / 0.04);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+    border: 1px solid oklch(1 0 0 / 0.08);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.10),
+      0 8px 32px oklch(0 0 0 / 0.36);
+  }
+
+  /* Stronger variant for surfaces that need more presence
+     (sidebar, the chat input dock). */
+  .glass-strong {
+    background-color: oklch(0.18 0.02 285 / 0.55);
+    backdrop-filter: blur(24px) saturate(150%);
+    -webkit-backdrop-filter: blur(24px) saturate(150%);
+    border: 1px solid oklch(1 0 0 / 0.10);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.12),
+      0 12px 40px oklch(0 0 0 / 0.45);
+  }
+
+  /* Violet-tinted glass for the user's own message bubble â€”
+     same glass system, but carries the brand accent. */
+  .glass-violet {
+    background-color: oklch(0.541 0.245 293.009 / 0.22);
+    backdrop-filter: blur(16px) saturate(140%);
+    -webkit-backdrop-filter: blur(16px) saturate(140%);
+    border: 1px solid oklch(0.541 0.245 293.009 / 0.35);
+    box-shadow:
+      inset 0 1px 0 0 oklch(1 0 0 / 0.14),
+      0 8px 28px oklch(0.541 0.245 293.009 / 0.20);
+  }
 }
+
