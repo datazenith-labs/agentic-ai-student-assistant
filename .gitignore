@@ -55,8 +55,8 @@ logs/
 .ipynb_checkpoints/
 
 # Cross-branch working tree noise (these exist on urbee/nextjs-frontend)
-nextjs-frontend/
-graphify-out/
+# nextjs-frontend/
+# graphify-out/
 
 # Local test files
 test-payload.json
