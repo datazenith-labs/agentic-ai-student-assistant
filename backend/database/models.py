@@ -5,7 +5,7 @@ Each class here is a database table. SQLAlchemy turns these Python
 classes into real SQL tables when init_db() runs.
 
 Tables: User, Session, Message, StudentProfile, Document,
-        QuizAttempt, Task, ConfidenceLog.
+        QuizAttempt, MockExam, Task, ConfidenceLog.
 
 Owner: Tanjid (Backend) - scaffolded by Abrar
 """
@@ -52,6 +52,8 @@ class User(Base):
     documents: Mapped[list["Document"]] = relationship(back_populates="user")
     tasks: Mapped[list["Task"]] = relationship(back_populates="user")
     profile: Mapped["StudentProfile"] = relationship(back_populates="user")
+    quiz_attempts: Mapped[list["QuizAttempt"]] = relationship(back_populates="user")
+    mock_exams: Mapped[list["MockExam"]] = relationship(back_populates="user")
 
 
 class Session(Base):
@@ -137,6 +139,27 @@ class QuizAttempt(Base):
     answers: Mapped[list] = mapped_column(JSON, default=list)
     score: Mapped[float] = mapped_column(Float, default=0.0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    user: Mapped["User"] = relationship(back_populates="quiz_attempts")
+
+
+class MockExam(Base):
+    """A full timed mock exam (multi-section practice exam)."""
+    __tablename__ = "mock_exams"
+
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"))
+    title: Mapped[str] = mapped_column(String)
+    topic: Mapped[str] = mapped_column(String)
+    difficulty: Mapped[str] = mapped_column(String, default="medium")  # easy | medium | hard
+    duration_minutes: Mapped[int] = mapped_column(Integer, default=60)
+    questions: Mapped[list] = mapped_column(JSON, default=list)
+    total_questions: Mapped[int] = mapped_column(Integer, default=0)
+    score: Mapped[float] = mapped_column(Float, nullable=True)
+    completed_at: Mapped[datetime] = mapped_column(DateTime, nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+    user: Mapped["User"] = relationship(back_populates="mock_exams")
 
 
 class ConfidenceLog(Base):
