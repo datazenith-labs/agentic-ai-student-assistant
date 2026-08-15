@@ -11,6 +11,7 @@ Owner: Minhazul (Frontend) - scaffolded by Abrar
 """
 
 import os
+import uuid
 
 import requests
 import streamlit as st
@@ -20,12 +21,6 @@ import streamlit as st
 # ----------------------------------------------------------------------
 
 API_URL = os.getenv("SAGE_API_URL", "http://localhost:8000/api/v1")
-
-# Hard-coded test IDs from Step 7A's test_client.py.
-# Later we'll add login that issues real IDs.
-DEFAULT_USER_ID = "1670551a-ecef-449c-a63c-cce402570981"
-DEFAULT_SESSION_ID = "5285610b-69a5-4efa-9e57-fb2678ce4808"
-
 
 # ----------------------------------------------------------------------
 # PAGE SETUP
@@ -47,16 +42,51 @@ st.caption("Student Academic Guidance Engine — your AI study assistant")
 
 if "messages" not in st.session_state:
     st.session_state.messages = []
-if "user_id" not in st.session_state:
-    st.session_state.user_id = DEFAULT_USER_ID
 if "session_id" not in st.session_state:
-    st.session_state.session_id = DEFAULT_SESSION_ID
+    st.session_state.session_id = str(uuid.uuid4())
 if "active_collection" not in st.session_state:
     st.session_state.active_collection = None
 if "active_doc_name" not in st.session_state:
     st.session_state.active_doc_name = None
 if "uploaded_filename" not in st.session_state:
     st.session_state.uploaded_filename = None
+if "access_token" not in st.session_state:
+    st.session_state.access_token = None
+
+
+if not st.session_state.access_token:
+    st.subheader("Sign in to continue")
+    login_tab, signup_tab = st.tabs(["Sign in", "Create account"])
+    with login_tab:
+        with st.form("login"):
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            if st.form_submit_button("Sign in"):
+                response = requests.post(f"{API_URL}/auth/login", json={"email": email, "password": password}, timeout=15)
+                if response.ok:
+                    data = response.json()
+                    st.session_state.access_token = data["access_token"]
+                    st.session_state.user = data["user"]
+                    st.rerun()
+                else:
+                    st.error(response.json().get("detail", "Sign in failed."))
+    with signup_tab:
+        with st.form("signup"):
+            name = st.text_input("Full name")
+            signup_email = st.text_input("Email", key="signup_email")
+            signup_password = st.text_input("Password (at least 8 characters)", type="password", key="signup_password")
+            if st.form_submit_button("Create account"):
+                response = requests.post(f"{API_URL}/auth/signup", json={"name": name, "email": signup_email, "password": signup_password}, timeout=15)
+                if response.ok:
+                    data = response.json()
+                    st.session_state.access_token = data["access_token"]
+                    st.session_state.user = data["user"]
+                    st.rerun()
+                else:
+                    st.error(response.json().get("detail", "Signup failed."))
+    st.stop()
+
+AUTH_HEADERS = {"Authorization": f"Bearer {st.session_state.access_token}"}
 
 
 # ----------------------------------------------------------------------
@@ -78,7 +108,7 @@ with st.sidebar:
             try:
                 response = requests.post(
                     f"{API_URL}/documents/upload",
-                    data={"user_id": st.session_state.user_id},
+                    headers=AUTH_HEADERS,
                     files={"file": (uploaded.name, uploaded.getvalue(), "application/pdf")},
                     timeout=300,  # ingestion can take time for big PDFs
                 )
@@ -106,7 +136,7 @@ with st.sidebar:
 
     st.divider()
     st.subheader("Session Info")
-    st.text_input("User ID", value=st.session_state.user_id, disabled=True)
+    st.text_input("Signed in as", value=st.session_state.user["email"], disabled=True)
     st.text_input("Session ID", value=st.session_state.session_id, disabled=True)
 
     st.divider()
@@ -124,6 +154,9 @@ with st.sidebar:
     st.divider()
     if st.button("Clear chat (local view only)"):
         st.session_state.messages = []
+        st.rerun()
+    if st.button("Sign out"):
+        st.session_state.clear()
         st.rerun()
 
 
@@ -154,8 +187,8 @@ if user_input:
             try:
                 response = requests.post(
                     f"{API_URL}/chat",
+                    headers=AUTH_HEADERS,
                     json={
-                        "user_id": st.session_state.user_id,
                         "session_id": st.session_state.session_id,
                         "message": user_input,
                         "collection_name": st.session_state.active_collection,

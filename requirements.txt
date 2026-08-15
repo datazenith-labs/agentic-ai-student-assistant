@@ -13,6 +13,7 @@ python-multipart
 pydantic
 pydantic-settings
 python-dotenv
+email-validator
 
 # --- LLM (Claude) ---
 anthropic
@@ -24,6 +25,7 @@ mcp
 llama-index-core
 llama-index-vector-stores-chroma
 llama-index-embeddings-openai
+llama-index-embeddings-huggingface
 chromadb
 
 # --- PDF Processing ---

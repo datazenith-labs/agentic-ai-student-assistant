@@ -13,11 +13,13 @@ import os
 import uuid
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.database.connection import AsyncSessionLocal
-from backend.database.models import Document
+from backend.database.connection import get_session
+from backend.database.models import Document, User
+from backend.dependencies import get_current_user
 from backend.rag.ingest import ingest_document
 
 router = APIRouter(prefix="/documents", tags=["documents"])
@@ -25,12 +27,6 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 # Where uploaded files land on disk
 UPLOAD_DIR = Path(os.getenv("UPLOAD_DIR", "./uploads"))
 UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
-
-
-async def get_db() -> AsyncSession:
-    """Yield a database session for the duration of one request."""
-    async with AsyncSessionLocal() as session:
-        yield session
 
 
 @router.post(
@@ -44,9 +40,9 @@ async def get_db() -> AsyncSession:
     ),
 )
 async def upload_document(
-    user_id: str = Form(..., description="The student's UUID"),
     file: UploadFile = File(..., description="The PDF file to ingest"),
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> dict:
     """
     Accept a PDF upload, ingest it, and return the resulting collection name.
@@ -66,7 +62,7 @@ async def upload_document(
 
     # 1. Create a database row in 'processing' state up front
     document = Document(
-        user_id=user_id,
+        user_id=current_user.id,
         filename=file.filename,
         status="processing",
         collection_name="",  # filled in after ingestion
@@ -91,7 +87,7 @@ async def upload_document(
         )
 
     # 3. Ingest into ChromaDB. Each user+document gets its own collection.
-    collection_name = f"user_{user_id.replace('-', '')}_doc_{document.id.replace('-', '')}"
+    collection_name = f"user_{current_user.id.replace('-', '')}_doc_{document.id.replace('-', '')}"
 
     try:
         result = ingest_document(str(file_path), collection_name)
@@ -115,3 +111,23 @@ async def upload_document(
         "chunk_count": result["chunk_count"],
         "status": "ready",
     }
+
+
+@router.get("", summary="List the authenticated user's documents")
+async def list_documents(
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
+) -> list[dict]:
+    result = await db.scalars(
+        select(Document).where(Document.user_id == current_user.id).order_by(Document.uploaded_at.desc())
+    )
+    return [
+        {
+            "document_id": doc.id,
+            "filename": doc.filename,
+            "status": doc.status,
+            "collection_name": doc.collection_name,
+            "uploaded_at": doc.uploaded_at,
+        }
+        for doc in result.all()
+    ]

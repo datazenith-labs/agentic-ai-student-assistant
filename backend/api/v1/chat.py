@@ -21,18 +21,42 @@ from typing import AsyncGenerator
 from fastapi import APIRouter, Depends, HTTPException, status
 from fastapi.responses import StreamingResponse
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy import select
 
 from backend.assistant.client import chat, chat_stream
-from backend.database.connection import AsyncSessionLocal
+from backend.database.connection import get_session
+from backend.database.models import Session, User
+from backend.dependencies import get_current_user
 from backend.schemas.chat import ChatRequest, ChatResponse, ErrorEvent
 
 router = APIRouter(prefix="/chat", tags=["chat"])
 
 
-async def get_db() -> AsyncSession:
-    """Yield a database session for the duration of one request."""
-    async with AsyncSessionLocal() as session:
-        yield session
+async def _owned_session(db: AsyncSession, session_id: str, user: User) -> Session:
+    session = await db.get(Session, session_id)
+    if session is None:
+        session = Session(id=session_id, user_id=user.id)
+        db.add(session)
+        await db.commit()
+        return session
+    if session.user_id != user.id:
+        raise HTTPException(status_code=404, detail="Conversation not found.")
+    return session
+
+
+async def _validate_collection(db: AsyncSession, collection_name: str | None, user: User) -> None:
+    if not collection_name:
+        return
+    from backend.database.models import Document
+    document = await db.scalar(
+        select(Document).where(
+            Document.collection_name == collection_name,
+            Document.user_id == user.id,
+            Document.status == "ready",
+        )
+    )
+    if document is None:
+        raise HTTPException(status_code=404, detail="Document collection not found.")
 
 
 # ----------------------------------------------------------------------
@@ -56,13 +80,16 @@ async def get_db() -> AsyncSession:
 )
 async def chat_endpoint(
     payload: ChatRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ) -> ChatResponse:
-    """Body: {user_id, session_id, message, collection_name?}"""
+    """The authenticated user owns the requested conversation and collection."""
+    await _owned_session(db, payload.session_id, current_user)
+    await _validate_collection(db, payload.collection_name, current_user)
     try:
         result = await chat(
             db=db,
-            user_id=payload.user_id,
+            user_id=current_user.id,
             session_id=payload.session_id,
             user_message=payload.message,
             collection_name=payload.collection_name,
@@ -92,6 +119,7 @@ def _format_sse(event: dict) -> bytes:
 async def _sse_generator(
     db: AsyncSession,
     payload: ChatRequest,
+    user_id: str,
 ) -> AsyncGenerator[bytes, None]:
     """
     Consume events from chat_stream() and yield SSE-formatted bytes.
@@ -103,7 +131,7 @@ async def _sse_generator(
     try:
         async for event in chat_stream(
             db=db,
-            user_id=payload.user_id,
+            user_id=user_id,
             session_id=payload.session_id,
             user_message=payload.message,
             collection_name=payload.collection_name,
@@ -130,11 +158,14 @@ async def _sse_generator(
 )
 async def chat_stream_endpoint(
     payload: ChatRequest,
-    db: AsyncSession = Depends(get_db),
+    db: AsyncSession = Depends(get_session),
+    current_user: User = Depends(get_current_user),
 ):
     """Body: same as /chat. Response: text/event-stream."""
+    await _owned_session(db, payload.session_id, current_user)
+    await _validate_collection(db, payload.collection_name, current_user)
     return StreamingResponse(
-        _sse_generator(db, payload),
+        _sse_generator(db, payload, current_user.id),
         media_type="text/event-stream",
         headers={
             # Critical: tell proxies/browsers not to buffer the stream.
