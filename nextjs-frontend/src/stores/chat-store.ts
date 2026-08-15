@@ -35,10 +35,6 @@ import type {
 // Helpers
 // ---------------------------------------------------------------------
 
-// User ID is hardcoded until auth lands in Step 13. Matches the seeded
-// test user in the backend DB.
-const TEST_USER_ID = "1670551a-ecef-449c-a63c-cce402570981";
-
 // Simple browser-native ID generator. Good enough for client-side keying;
 // the backend assigns canonical IDs for any persisted record.
 function clientId(): string {
@@ -153,7 +149,6 @@ export const useChatStore = create<ChatState>((set, get) => ({
 
     try {
       for await (const event of chatStream({
-        user_id: TEST_USER_ID,
         session_id: conversationId,
         message: text,
       })) {

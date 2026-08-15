@@ -22,6 +22,7 @@
 import { Sidebar } from "@/components/layout/Sidebar";
 import { Topbar } from "@/components/layout/Topbar";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { AuthGate } from "@/components/auth/AuthGate";
 
 export default function AppLayout({
   children,
@@ -29,7 +30,7 @@ export default function AppLayout({
   children: React.ReactNode;
 }) {
   return (
-    <TooltipProvider delayDuration={200}>
+    <AuthGate><TooltipProvider delayDuration={200}>
       <div className="flex h-screen w-full overflow-hidden bg-background">
         <Sidebar />
 
@@ -38,6 +39,6 @@ export default function AppLayout({
           <main className="flex-1 overflow-y-auto">{children}</main>
         </div>
       </div>
-    </TooltipProvider>
+    </TooltipProvider></AuthGate>
   );
 }

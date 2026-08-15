@@ -16,13 +16,14 @@ Owner: Tanjid (Backend) - scaffolded by Abrar
 """
 
 import os
+from contextlib import asynccontextmanager
 
 from dotenv import load_dotenv
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from backend.api.v1 import chat as chat_routes
-from backend.api.v1 import documents as documents_routes
+from backend.api.v1 import auth as auth_routes
+from backend.database.connection import init_db
 
 load_dotenv()
 
@@ -31,6 +32,12 @@ load_dotenv()
 # APP CREATION
 # ----------------------------------------------------------------------
 
+@asynccontextmanager
+async def lifespan(_: FastAPI):
+    await init_db()
+    yield
+
+
 app = FastAPI(
     title="SAGE - Agentic AI Student Assistant",
     description=(
@@ -38,6 +45,7 @@ app = FastAPI(
         "Powered by Claude, MCP (Model Context Protocol), and RAG."
     ),
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 
@@ -63,12 +71,17 @@ app.add_middleware(
 # ROUTES
 # ----------------------------------------------------------------------
 
-# Register routers under /api/v1
-# Full paths become:
-#   POST /api/v1/chat
-#   POST /api/v1/documents/upload
-app.include_router(chat_routes.router, prefix="/api/v1")
-app.include_router(documents_routes.router, prefix="/api/v1")
+app.include_router(auth_routes.router, prefix="/api/v1")
+
+# Auth-only mode lets contributors test accounts without API keys or the
+# heavyweight RAG model dependencies. Chat and uploads are intentionally absent.
+AUTH_ONLY_MODE = os.getenv("AUTH_ONLY_MODE", "false").lower() == "true"
+if not AUTH_ONLY_MODE:
+    from backend.api.v1 import chat as chat_routes
+    from backend.api.v1 import documents as documents_routes
+
+    app.include_router(chat_routes.router, prefix="/api/v1")
+    app.include_router(documents_routes.router, prefix="/api/v1")
 
 
 @app.get("/", tags=["health"])

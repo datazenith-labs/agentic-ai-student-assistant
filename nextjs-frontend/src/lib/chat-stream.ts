@@ -22,6 +22,7 @@
 // Two newlines separate events. We split on that.
 
 import type { ChatRequest, ChatStreamEvent } from "@/types/chat";
+import { getAccessToken } from "@/lib/auth";
 
 const API_BASE = process.env.NEXT_PUBLIC_API_BASE ?? "http://localhost:8000";
 
@@ -50,6 +51,7 @@ export async function* chatStream(
     headers: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
+      Authorization: `Bearer ${getAccessToken() ?? ""}`,
     },
     body: JSON.stringify(req),
     signal,

@@ -18,11 +18,6 @@ from pydantic import BaseModel, Field
 class ChatRequest(BaseModel):
     """The JSON body for POST /api/v1/chat (and /api/v1/chat/stream)."""
 
-    user_id: str = Field(
-        ...,
-        description="The student's UUID. For now, passed directly; later replaced by JWT auth.",
-        examples=["1670551a-ecef-449c-a63c-cce402570981"],
-    )
     session_id: str = Field(
         ...,
         description="The chat session (conversation thread) UUID.",

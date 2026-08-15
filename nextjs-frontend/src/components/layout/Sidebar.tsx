@@ -9,7 +9,7 @@
 import Image from "next/image";
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { ChevronsLeft, Plus, Settings, ChevronDown } from "lucide-react";
+import { ChevronsLeft, Plus, LogOut } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -17,6 +17,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { cn } from "@/lib/utils";
 import { useChat } from "@/hooks/use-chat";
+import { useAuthStore } from "@/stores/auth-store";
 
 import { NAV_ITEMS } from "./nav-items";
 
@@ -25,6 +26,7 @@ export function Sidebar() {
   const router = useRouter();
   const { conversations, currentConversation, startNewConversation } =
     useChat();
+  const { user, signOut } = useAuthStore();
 
   const handleNewChat = () => {
     const id = startNewConversation();
@@ -144,30 +146,24 @@ export function Sidebar() {
       <div className="border-t border-slate-800/60 p-4">
         <div className="flex items-center gap-3">
           <Avatar className="size-9">
-            <AvatarImage src="" alt="Abrar Fahim" />
+            <AvatarImage src="" alt={user?.name ?? "Student"} />
             <AvatarFallback className="bg-violet-900 text-violet-100 text-xs">
-              AF
+              {(user?.name ?? "S").split(" ").map((part) => part[0]).join("").slice(0, 2).toUpperCase()}
             </AvatarFallback>
           </Avatar>
           <div className="flex-1 leading-tight min-w-0">
             <div className="text-sm font-medium text-white truncate">
-              Abrar Fahim
+              {user?.name ?? "Student"}
             </div>
-            <div className="text-[11px] text-slate-400">Computer Science</div>
+            <div className="text-[11px] text-slate-400 truncate">{user?.email}</div>
           </div>
           <button
             type="button"
-            aria-label="Account menu"
+            aria-label="Sign out"
+            onClick={() => { signOut(); router.replace("/login"); }}
             className="text-slate-400 hover:text-slate-200 transition-colors"
           >
-            <ChevronDown className="size-4" />
-          </button>
-          <button
-            type="button"
-            aria-label="Settings"
-            className="text-slate-400 hover:text-slate-200 transition-colors"
-          >
-            <Settings className="size-4" />
+            <LogOut className="size-4" />
           </button>
         </div>
       </div>

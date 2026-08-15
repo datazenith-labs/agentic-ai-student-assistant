@@ -18,7 +18,6 @@
 // ---------------------------------------------------------------------
 
 export type ChatRequest = {
-  user_id: string;
   session_id: string;
   message: string;
   // Optional ChromaDB collection name for RAG. Null/undefined → no RAG
