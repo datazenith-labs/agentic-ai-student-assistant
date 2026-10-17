@@ -11,6 +11,8 @@ Available tools:
     - search_materials      : RAG search over the student's uploaded documents.
     - summarize_document    : Returns a summary of an entire uploaded document.
     - generate_quiz         : Generates a multiple-choice quiz.
+    - create_mock_exam      : Generates a full timed practice exam.
+    - evaluate_answer       : Grades a student's answer with detailed feedback.
 
   Adaptive engine tools (Step 9):
     - log_confidence        : Record how confident a student feels on a topic.
@@ -33,7 +35,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from backend.rag.retriever import search_documents
 
 # Database access for adaptive engine tools
-from backend.database.models import ConfidenceLog
+from backend.database.models import ConfidenceLog, MockExam
 
 load_dotenv()
 
@@ -141,6 +143,81 @@ EXAM_PREP_TOOLS = [
                 },
             },
             "required": ["topic"],
+        },
+    },
+    {
+        "name": "create_mock_exam",
+        "description": (
+            "Generate a full timed practice exam simulating real exam conditions. "
+            "Use this when the student says things like 'give me a mock exam', "
+            "'simulate an exam', 'I want to practice under exam conditions', "
+            "'create a practice test', or 'give me a full exam'. Produces a "
+            "structured exam with multiple questions, time limits, and instructions. "
+            "If the student has uploaded materials, call search_materials FIRST "
+            "to get context, then pass that as the topic."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "topic": {
+                    "type": "string",
+                    "description": "The topic or context for the exam. Can be a plain topic or retrieved excerpts from documents.",
+                },
+                "collection_name": {
+                    "type": "string",
+                    "description": "Optional. The student's document collection for RAG-grounded exams.",
+                },
+                "num_questions": {
+                    "type": "integer",
+                    "description": "Number of questions. Default is 20.",
+                    "default": 20,
+                },
+                "difficulty": {
+                    "type": "string",
+                    "enum": ["easy", "medium", "hard"],
+                    "description": "Difficulty level. Default is 'medium'.",
+                    "default": "medium",
+                },
+                "duration_minutes": {
+                    "type": "integer",
+                    "description": "Time limit in minutes. Default is 60.",
+                    "default": 60,
+                },
+            },
+            "required": ["topic"],
+        },
+    },
+    {
+        "name": "evaluate_answer",
+        "description": (
+            "Grade a student's answer to a question and provide detailed feedback. "
+            "Use this after the student answers a quiz question or mock exam "
+            "question. Also use when the student asks 'how did I do?', "
+            "'grade my answer', or 'was my answer correct?'. Returns a score, "
+            "correctness flag, and specific improvements."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "question": {
+                    "type": "string",
+                    "description": "The original question text.",
+                },
+                "student_answer": {
+                    "type": "string",
+                    "description": "The answer the student provided.",
+                },
+                "correct_answer": {
+                    "type": "string",
+                    "description": "The correct answer to compare against.",
+                },
+                "explanation": {
+                    "type": "string",
+                    "description": "Optional explanation of why the correct answer is right.",
+                    "default": "",
+                },
+            },
+            "required": ["question", "student_answer", "correct_answer"],
         },
     },
 
@@ -335,6 +412,149 @@ with no other text before or after:
 
 
 # ====================================================================
+# TOOL IMPLEMENTATIONS — Mock Exam & Answer Evaluation
+# ====================================================================
+
+def create_mock_exam(
+    topic: str,
+    collection_name: str = "",
+    num_questions: int = 20,
+    difficulty: str = "medium",
+    duration_minutes: int = 60,
+) -> dict:
+    """Generate a full timed practice exam with structured sections."""
+    # If a collection is specified, enrich the topic with RAG context
+    rag_context = ""
+    if collection_name:
+        chunks = search_documents(
+            f"comprehensive overview of {topic}",
+            collection_name,
+            top_k=10,
+        )
+        if chunks:
+            rag_context = "\n\n".join(
+                [f"[Page {c['page']}]\n{c['text']}" for c in chunks]
+            )
+
+    context_block = rag_context if rag_context else topic
+    time_per_question = max(1, round(duration_minutes / num_questions))
+
+    prompt = f"""Generate a {difficulty}-difficulty timed practice exam based on the following context.
+
+If the context contains specific document excerpts, base ALL questions ONLY on what's in those excerpts.
+If the context is a general topic, use your general knowledge.
+
+CONTEXT:
+{context_block}
+
+Create a realistic exam with exactly {num_questions} multiple-choice questions.
+The exam should feel like a real university exam — varied question types (conceptual, analytical, application).
+
+Duration: {duration_minutes} minutes (~{time_per_question} min per question).
+
+Return ONLY valid JSON in this exact format, with no other text before or after:
+
+{{
+  "title": "descriptive exam title",
+  "topic": "brief topic summary",
+  "difficulty": "{difficulty}",
+  "duration_minutes": {duration_minutes},
+  "time_per_question_minutes": {time_per_question},
+  "instructions": "exam instructions for the student",
+  "total_questions": {num_questions},
+  "questions": [
+    {{
+      "number": 1,
+      "question": "the question text",
+      "options": {{"A": "option A", "B": "option B", "C": "option C", "D": "option D"}},
+      "correct_answer": "A",
+      "explanation": "brief explanation of why this is correct",
+      "topic_tag": "specific sub-topic this question covers"
+    }}
+  ]
+}}
+"""
+
+    response = _client.messages.create(
+        model=_MODEL,
+        max_tokens=4000,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw_text = response.content[0].text.strip()
+    if raw_text.startswith("```"):
+        raw_text = raw_text.split("```")[1]
+        if raw_text.startswith("json"):
+            raw_text = raw_text[4:]
+        raw_text = raw_text.strip()
+
+    exam_data = json.loads(raw_text)
+    exam_data["status"] = "ok"
+    exam_data["rag_enriched"] = bool(rag_context)
+    return exam_data
+
+
+def evaluate_answer(
+    question: str,
+    student_answer: str,
+    correct_answer: str,
+    explanation: str = "",
+) -> dict:
+    """Grade a student's answer and provide detailed feedback."""
+    explanation_block = f"\nEXPLANATION: {explanation}" if explanation else ""
+
+    prompt = f"""You are an expert tutor grading a student's answer. Evaluate the answer strictly but fairly.
+
+QUESTION:
+{question}
+
+CORRECT ANSWER:
+{correct_answer}
+{explanation_block}
+
+STUDENT'S ANSWER:
+{student_answer}
+
+Evaluate the student's answer and return ONLY valid JSON in this exact format:
+
+{{
+  "is_correct": true or false,
+  "score": 0 to 100,
+  "correctness_label": "exactly_correct" OR "mostly_correct" OR "partially_correct" OR "incorrect",
+  "feedback": "2-3 sentences of encouraging feedback",
+  "what_the_student_got_right": "specific points the student understood correctly",
+  "what_to_improve": "specific actionable advice for improvement",
+  "key_concept": "the core concept this question tests"
+}}
+
+Scoring rubric:
+- 90-100: Exactly correct or extremely close
+- 70-89: Mostly correct, minor gaps
+- 40-69: Partially correct, significant gaps but understood some concepts
+- 0-39: Incorrect or fundamentally misunderstood
+
+Be encouraging in feedback but honest about correctness."""
+
+    response = _client.messages.create(
+        model=_MODEL,
+        max_tokens=800,
+        messages=[{"role": "user", "content": prompt}],
+    )
+
+    raw_text = response.content[0].text.strip()
+    if raw_text.startswith("```"):
+        raw_text = raw_text.split("```")[1]
+        if raw_text.startswith("json"):
+            raw_text = raw_text[4:]
+        raw_text = raw_text.strip()
+
+    result = json.loads(raw_text)
+    result["status"] = "ok"
+    result["question_preview"] = question[:100] + "..." if len(question) > 100 else question
+    return result
+
+
+# ====================================================================
 # TOOL IMPLEMENTATIONS — Adaptive engine (Step 9)
 # ====================================================================
 
@@ -502,6 +722,10 @@ def execute_tool(tool_name: str, tool_input: dict) -> dict:
         return summarize_document(**tool_input)
     if tool_name == "generate_quiz":
         return generate_quiz(**tool_input)
+    if tool_name == "create_mock_exam":
+        return create_mock_exam(**tool_input)
+    if tool_name == "evaluate_answer":
+        return evaluate_answer(**tool_input)
     if tool_name == "log_confidence":
         return log_confidence(**tool_input)
     if tool_name == "identify_weak_topics":
